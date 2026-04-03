@@ -2,9 +2,9 @@ use crate::models::job::Job;
 use crate::queue::job_queue::JobQueue;
 use crate::services::ai_service::call_ai;
 use redis::AsyncCommands;
-use tracing::{error, info, warn};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
+use tracing::{error, info, warn};
 
 const MAX_RETRIES: i32 = 3;
 
