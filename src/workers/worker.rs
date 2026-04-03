@@ -1,3 +1,4 @@
+use crate::models::job::Job;
 use crate::queue::job_queue::JobQueue;
 use crate::services::ai_service::call_ai;
 use redis::AsyncCommands;
@@ -10,30 +11,39 @@ pub async fn worker(queue: JobQueue, semaphore: Arc<Semaphore>) {
     let mut conn = queue.client.get_async_connection().await.unwrap();
 
     loop {
-        let job: Option<(String, String)> = conn.blpop("job_queue", 0.0).await.unwrap();
+        let result: Option<(String, String)> = conn.blpop("job_queue", 0.0).await.unwrap();
 
-        if let Some((_key, job_data)) = job {
+        if let Some((_key, job_data)) = result {
             let permit = semaphore.acquire().await.unwrap();
-            let parts: Vec<&str> = job_data.splitn(3, "::").collect();
 
-            if parts.len() != 3 {
-                println!("Invalid job format: {}", job_data);
-                continue;
-            }
+            let job: Job = match serde_json::from_str(&job_data) {
+                Ok(job) => job,
+                Err(e) => {
+                    println!("Error parsing job data: {}", e);
+                    drop(permit); // 🔥 IMPORTANT
+                    continue;
+                }
+            };
 
-            let job_id = parts[0].to_string();
-            let retry_count: i32 = parts[1].parse().unwrap_or(0);
-            let logs = parts[2].to_string();
+            let job_id = job.id.clone();
+            let retry_count = job.retry;
+            let logs = job.logs;
 
             println!("[WORKER] job={} retry={}", job_id, retry_count);
 
-            let result = call_ai(logs).await;
+            let result = call_ai(logs.clone()).await;
 
             if result.is_empty() {
                 if retry_count < MAX_RETRIES {
-                    let new_job = format!("{}::{}::{}", job_id, retry_count + 1, parts[2]);
+                    let new_job = Job {
+                        id: job.id.clone(),
+                        retry: retry_count + 1,
+                        logs: logs.clone(),
+                    };
 
-                    let _: () = conn.lpush("job_queue", new_job).await.unwrap();
+                    let job_json = serde_json::to_string(&new_job).unwrap();
+
+                    let _: () = conn.lpush("job_queue", job_json).await.unwrap();
 
                     println!("Retrying job {}", job_id);
                 } else {
@@ -49,7 +59,8 @@ pub async fn worker(queue: JobQueue, semaphore: Arc<Semaphore>) {
 
                 println!("Job {} completed", job_id);
             }
-            drop(permit);
+
+            drop(permit); // release slot
         }
     }
 }

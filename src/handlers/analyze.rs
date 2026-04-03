@@ -1,5 +1,6 @@
 // handlers/analyze.rs
 use crate::app_state::AppState;
+use crate::models::job::Job;
 use crate::models::log::{LogRequest, LogResponse};
 use axum::{Json, debug_handler, extract::State};
 use redis::AsyncCommands;
@@ -12,8 +13,12 @@ pub async fn analyze(
 ) -> Json<LogResponse> {
     let job_id = Uuid::new_v4().to_string();
     let mut conn = state.queue.client.get_async_connection().await.unwrap();
-
-    let job_data = format!("{}::{}::{}", job_id, 0, payload.logs);
+    let job = Job {
+        id: job_id.clone(),
+        retry: 0,
+        logs: payload.logs,
+    };
+    let job_data = serde_json::to_string(&job).unwrap();
     let _: () = conn.lpush("job_queue", job_data).await.unwrap();
 
     Json(LogResponse {
