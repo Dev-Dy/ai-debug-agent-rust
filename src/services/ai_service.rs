@@ -1,7 +1,9 @@
 // services/ai_service.rs
 use reqwest;
 
-pub async fn call_ai(logs: String) -> String {
+use crate::errors::error::AppError;
+
+pub async fn call_ai(logs: String) -> Result<String, AppError> {
     let client = reqwest::Client::new();
 
     let response = client
@@ -15,13 +17,14 @@ pub async fn call_ai(logs: String) -> String {
             ]
         }))
         .send()
-        .await
-        .unwrap();
+        .await?;
 
-    let body: serde_json::Value = response.json().await.unwrap();
+    let body: serde_json::Value = response
+        .json()
+        .await?;
 
-    body["choices"][0]["message"]["content"]
+    Ok(body["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or("No response")
-        .to_string()
+        .to_string())
 }

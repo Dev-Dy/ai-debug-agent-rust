@@ -5,6 +5,7 @@ mod models;
 mod queue;
 mod services;
 mod workers;
+mod errors;
 
 use queue::job_queue::JobQueue;
 use redis::Client;
