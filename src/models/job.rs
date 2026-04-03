@@ -4,5 +4,5 @@ use serde::{Deserialize, Serialize};
 pub struct Job {
     pub id: String,
     pub retry: i32,
-    pub logs: String,   
+    pub logs: String,
 }

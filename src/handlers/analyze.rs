@@ -19,14 +19,9 @@ pub async fn analyze(
     };
     let job_data = serde_json::to_string(&job)?;
 
-    let mut conn = state
-        .queue
-        .client
-        .get_async_connection()
-        .await?;
+    let mut conn = state.queue.client.get_async_connection().await?;
 
-    let _: () = conn.lpush("job_queue", job_data)
-        .await?;
+    let _: () = conn.lpush("job_queue", job_data).await?;
 
     Ok(Json(LogResponse {
         analysis: "Job queued".to_string(),

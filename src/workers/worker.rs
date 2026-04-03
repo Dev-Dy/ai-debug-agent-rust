@@ -74,7 +74,7 @@ pub async fn worker(queue: JobQueue, semaphore: Arc<Semaphore>) {
                         }
                     };
 
-                    if let Err(e) = conn.lpush::<_,_, ()>("job_queue", job_json).await {
+                    if let Err(e) = conn.lpush::<_, _, ()>("job_queue", job_json).await {
                         error!(error = ?e, "Failed to requeue job");
                     }
                 } else {
@@ -90,8 +90,10 @@ pub async fn worker(queue: JobQueue, semaphore: Arc<Semaphore>) {
             }
         };
 
-        // ✅ Store result
-        if let Err(e) = conn.set_ex::<_, _, ()>(format!("result:{}", job_id), result, 300).await {
+        if let Err(e) = conn
+            .set_ex::<_, _, ()>(format!("result:{}", job_id), result, 300)
+            .await
+        {
             error!(error = ?e, "Failed to store result");
         }
 

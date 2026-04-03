@@ -19,9 +19,7 @@ pub async fn call_ai(logs: String) -> Result<String, AppError> {
         .send()
         .await?;
 
-    let body: serde_json::Value = response
-        .json()
-        .await?;
+    let body: serde_json::Value = response.json().await?;
 
     Ok(body["choices"][0]["message"]["content"]
         .as_str()
