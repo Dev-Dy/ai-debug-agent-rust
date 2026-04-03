@@ -1,16 +1,20 @@
 use crate::queue::job_queue::JobQueue;
 use crate::services::ai_service::call_ai;
 use redis::AsyncCommands;
+use tokio::sync::Semaphore;
+use std::sync::Arc;
 
 const MAX_RETRIES: i32 = 3;
 
-pub async fn worker(queue: JobQueue) {
+pub async fn worker(queue: JobQueue, semaphore: Arc<Semaphore>) {
     let mut conn = queue.client.get_async_connection().await.unwrap();
 
     loop {
         let job: Option<String> = conn.rpop("job_queue", None).await.unwrap();
 
         if let Some(job_data) = job {
+            let permit = semaphore
+            .acquire().await.unwrap();
             let parts: Vec<&str> = job_data.splitn(3, "::").collect();
 
             if parts.len() != 3 {
@@ -51,6 +55,7 @@ pub async fn worker(queue: JobQueue) {
 
                 println!("Job {} completed", job_id);
             }
+            drop(permit);
         } else {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
