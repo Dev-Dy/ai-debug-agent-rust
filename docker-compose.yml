@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+
+  api:
+    build: .
+    command: ["./ai_debug_agent", "api"]
+    ports:
+      - "3000:3000"
+    depends_on:
+      - redis
+    env_file:
+      - .env
+
+  worker:
+    build: .
+    command: ["./ai_debug_agent", "worker"]
+    depends_on:
+      - redis
+    env_file:
+      - .env
+    deploy:
+      replicas: 1
