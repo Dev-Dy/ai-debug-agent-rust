@@ -1,4 +1,7 @@
-# scripts/logs.sh
 #!/bin/bash
+set -e
 
-docker-compose logs -f --tail=100
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+docker compose logs -f --tail=100

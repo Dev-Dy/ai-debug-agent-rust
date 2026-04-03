@@ -1,28 +1,57 @@
-version: "3.9"
-
 services:
   redis:
     image: redis:7
     ports:
       - "6379:6379"
     command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   api:
-    build: .
-    command: ["./ai_debug_agent", "api"]
+    build:
+      context: .
+      dockerfile: DOCKERFILE
+    command: ["api"]
     ports:
       - "3000:3000"
+    environment:
+      REDIS_URL: redis://redis:6379/
+      BIND_ADDR: 0.0.0.0:3000
+      JOB_STREAM: job_stream
+      DLQ_STREAM: job_dlq_stream
+      CONSUMER_GROUP: job_workers
     depends_on:
-      - redis
-    env_file:
-      - .env
+      redis:
+        condition: service_healthy
 
   worker:
-    build: .
-    command: ["./ai_debug_agent", "worker"]
+    build:
+      context: .
+      dockerfile: DOCKERFILE
+    command: ["worker"]
+    environment:
+      REDIS_URL: redis://redis:6379/
+      WORKER_COUNT: ${WORKER_COUNT:-5}
+      MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-3}
+      MAX_RETRIES: ${MAX_RETRIES:-3}
+      CLAIM_IDLE_MS: ${CLAIM_IDLE_MS:-30000}
+      READ_BLOCK_MS: ${READ_BLOCK_MS:-5000}
+      JOB_STATUS_TTL_SECS: ${JOB_STATUS_TTL_SECS:-86400}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      AI_ENDPOINT: ${AI_ENDPOINT:-https://api.openai.com/v1/chat/completions}
+      AI_MODEL: ${AI_MODEL:-gpt-4o-mini}
+      AI_TIMEOUT_SECS: ${AI_TIMEOUT_SECS:-30}
+      JOB_STREAM: job_stream
+      DLQ_STREAM: job_dlq_stream
+      CONSUMER_GROUP: job_workers
     depends_on:
-      - redis
-    env_file:
-      - .env
-    deploy:
-      replicas: 1
+      redis:
+        condition: service_healthy
+
+volumes:
+  redis-data:
