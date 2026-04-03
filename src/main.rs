@@ -9,6 +9,7 @@ mod workers;
 use queue::job_queue::JobQueue;
 use redis::Client;
 use tokio::net::TcpListener;
+use tracing::info;
 use workers::worker::worker;
 
 use std::sync::Arc;
@@ -16,6 +17,12 @@ use tokio::sync::Semaphore;
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt()
+    .with_max_level(tracing::Level::INFO)
+    .with_target(false)
+    .with_thread_ids(true)
+    .with_thread_names(true)
+    .init();
     let redis_client = Client::open("redis://127.0.0.1/").unwrap();
 
     let queue = JobQueue {
@@ -40,7 +47,7 @@ async fn main() {
 
     let listener = TcpListener::bind("127.0.0.1:3000").await.unwrap();
 
-    println!("Server running on 127.0.0.1:3000");
+    info!("Server running on 127.0.0.1:3000");
 
     axum::serve(listener, app).await.unwrap();
 }

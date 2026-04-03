@@ -2,6 +2,7 @@ use crate::models::job::Job;
 use crate::queue::job_queue::JobQueue;
 use crate::services::ai_service::call_ai;
 use redis::AsyncCommands;
+use tracing::{error, info, warn};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
@@ -19,7 +20,7 @@ pub async fn worker(queue: JobQueue, semaphore: Arc<Semaphore>) {
             let job: Job = match serde_json::from_str(&job_data) {
                 Ok(job) => job,
                 Err(e) => {
-                    println!("Error parsing job data: {}", e);
+                    error!("Error parsing job data: {}", e);
                     drop(permit); // 🔥 IMPORTANT
                     continue;
                 }
@@ -29,7 +30,7 @@ pub async fn worker(queue: JobQueue, semaphore: Arc<Semaphore>) {
             let retry_count = job.retry;
             let logs = job.logs;
 
-            println!("[WORKER] job={} retry={}", job_id, retry_count);
+            info!(job_id = %job_id, retry = retry_count, "Processing job");
 
             let result = call_ai(logs.clone()).await;
 
@@ -45,11 +46,11 @@ pub async fn worker(queue: JobQueue, semaphore: Arc<Semaphore>) {
 
                     let _: () = conn.lpush("job_queue", job_json).await.unwrap();
 
-                    println!("Retrying job {}", job_id);
+                    warn!(job_id = %job_id, retry = retry_count, "Retrying job");
                 } else {
                     let _: () = conn.lpush("dlq", job_data).await.unwrap();
 
-                    println!("Moved to DLQ: {}", job_id);
+                    error!(job_id = %job_id, "Moved job to DLQ");
                 }
             } else {
                 let _: () = conn
@@ -57,7 +58,7 @@ pub async fn worker(queue: JobQueue, semaphore: Arc<Semaphore>) {
                     .await
                     .unwrap();
 
-                println!("Job {} completed", job_id);
+                info!(job_id = %job_id, "Job completed");
             }
 
             drop(permit); // release slot
