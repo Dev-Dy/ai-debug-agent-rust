@@ -10,9 +10,9 @@ pub async fn worker(queue: JobQueue, semaphore: Arc<Semaphore>) {
     let mut conn = queue.client.get_async_connection().await.unwrap();
 
     loop {
-        let job: Option<String> = conn.rpop("job_queue", None).await.unwrap();
+        let job: Option<(String, String)> = conn.blpop("job_queue", 0.0).await.unwrap();
 
-        if let Some(job_data) = job {
+        if let Some((_key, job_data)) = job {
             let permit = semaphore.acquire().await.unwrap();
             let parts: Vec<&str> = job_data.splitn(3, "::").collect();
 
@@ -50,8 +50,6 @@ pub async fn worker(queue: JobQueue, semaphore: Arc<Semaphore>) {
                 println!("Job {} completed", job_id);
             }
             drop(permit);
-        } else {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
     }
 }
