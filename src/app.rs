@@ -1,8 +1,8 @@
-use axum::{Router, routing::post};
-use crate::handlers::analyze::analyze;
-use crate::queue::job_queue::JobQueue;
 use crate::app_state::AppState;
+use crate::handlers::analyze::analyze;
 use crate::handlers::result::get_result;
+use crate::queue::job_queue::JobQueue;
+use axum::{Router, routing::post};
 
 pub fn create_app(queue: JobQueue) -> Router {
     let state = AppState { queue };

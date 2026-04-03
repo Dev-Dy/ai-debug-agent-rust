@@ -1,8 +1,8 @@
 use crate::queue::job_queue::JobQueue;
 use crate::services::ai_service::call_ai;
 use redis::AsyncCommands;
-use tokio::sync::Semaphore;
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 const MAX_RETRIES: i32 = 3;
 
@@ -13,8 +13,7 @@ pub async fn worker(queue: JobQueue, semaphore: Arc<Semaphore>) {
         let job: Option<String> = conn.rpop("job_queue", None).await.unwrap();
 
         if let Some(job_data) = job {
-            let permit = semaphore
-            .acquire().await.unwrap();
+            let permit = semaphore.acquire().await.unwrap();
             let parts: Vec<&str> = job_data.splitn(3, "::").collect();
 
             if parts.len() != 3 {
@@ -32,12 +31,7 @@ pub async fn worker(queue: JobQueue, semaphore: Arc<Semaphore>) {
 
             if result.is_empty() {
                 if retry_count < MAX_RETRIES {
-                    let new_job = format!(
-                        "{}::{}::{}",
-                        job_id,
-                        retry_count + 1,
-                        parts[2]
-                    );
+                    let new_job = format!("{}::{}::{}", job_id, retry_count + 1, parts[2]);
 
                     let _: () = conn.lpush("job_queue", new_job).await.unwrap();
 

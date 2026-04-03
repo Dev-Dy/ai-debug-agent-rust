@@ -2,8 +2,8 @@
 use crate::app_state::AppState;
 use crate::models::log::{LogRequest, LogResponse};
 use axum::{Json, debug_handler, extract::State};
-use uuid::Uuid;
 use redis::AsyncCommands;
+use uuid::Uuid;
 
 #[debug_handler]
 pub async fn analyze(
@@ -15,7 +15,7 @@ pub async fn analyze(
 
     let job_data = format!("{}::{}::{}", job_id, 0, payload.logs);
     let _: () = conn.lpush("job_queue", job_data).await.unwrap();
-    
+
     Json(LogResponse {
         analysis: "Job queued".to_string(),
     })
