@@ -7,16 +7,16 @@ mod services;
 mod worker;
 
 use queue::job_queue::JobQueue;
-use std::collections::VecDeque;
-use std::sync::Arc;
+use redis::Client;
 use tokio::net::TcpListener;
-use tokio::sync::Mutex;
 use worker::worker::worker;
 
 #[tokio::main]
 async fn main() {
-    let queue: JobQueue = Arc::new(Mutex::new(VecDeque::new()));
-
+    let redis_client = Client::open("redis://127.0.0.1/").unwrap();
+    let queue = JobQueue {
+        client: redis_client,
+    };
     let app = app::create_app(queue.clone());
 
     tokio::spawn(worker(queue.clone()));

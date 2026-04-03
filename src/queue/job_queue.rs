@@ -1,6 +1,6 @@
-// queue/job_queue.rs
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use std::collections::VecDeque;
+use redis::Client;
 
-pub type JobQueue = Arc<Mutex<VecDeque<String>>>;
+#[derive(Clone)]
+pub struct JobQueue {
+    pub client: Client,
+}
