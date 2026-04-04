@@ -1,104 +1,166 @@
-use redis::AsyncCommands;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use tokio::sync::Semaphore;
 use tracing::{error, info, warn};
 
-use crate::models::job::Job;
-use crate::queue::job_queue::JobQueue;
-use crate::services::ai_service::call_ai;
+use crate::errors::error::AppError;
+use crate::queue::job_queue::{JobQueue, StreamJob};
+use crate::services::ai_service::AiService;
 
-const MAX_RETRIES: i32 = 3;
+pub async fn worker(
+    queue: JobQueue,
+    ai_service: AiService,
+    semaphore: Arc<Semaphore>,
+    consumer_name: String,
+    max_retries: u32,
+) {
+    let mut consumer_conn = loop {
+        match queue.create_consumer_connection().await {
+            Ok(conn) => break conn,
+            Err(error) => {
+                error!(error = ?error, consumer = %consumer_name, "Failed to create Redis consumer connection");
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+    };
 
-pub async fn worker(queue: JobQueue, semaphore: Arc<Semaphore>) {
     loop {
-        let mut conn = match queue.client.get_async_connection().await {
-            Ok(c) => c,
-            Err(e) => {
-                error!(error = ?e, "Redis connection failed");
-                continue;
+        let permit = match semaphore.clone().acquire_owned().await {
+            Ok(permit) => permit,
+            Err(error) => {
+                error!(error = ?error, consumer = %consumer_name, "Semaphore acquire failed");
+                return;
             }
         };
 
-        let (_key, job_data): (String, String) = match conn.blpop("job_queue", 0.0).await {
-            Ok(Some(data)) => data,
-            Ok(None) => continue,
-            Err(e) => {
-                error!(error = ?e, "BLPOP failed");
-                continue;
-            }
-        };
-
-        let permit = match semaphore.acquire().await {
-            Ok(p) => p,
-            Err(e) => {
-                error!(error = ?e, "Semaphore acquire failed");
-                continue;
-            }
-        };
-
-        let job: Job = match serde_json::from_str(&job_data) {
-            Ok(job) => job,
-            Err(e) => {
-                error!(error = ?e, "Invalid job JSON");
+        let maybe_stream_job = match queue
+            .fetch_next_job(&mut consumer_conn, &consumer_name)
+            .await
+        {
+            Ok(stream_job) => stream_job,
+            Err(error) => {
+                error!(error = ?error, consumer = %consumer_name, "Failed to fetch job from stream");
                 drop(permit);
-                continue;
-            }
-        };
 
-        let job_id = job.id.clone();
-        let retry_count = job.retry;
-        let logs = job.logs.clone();
-
-        info!(job_id = %job_id, retry = retry_count, "Processing job");
-
-        let result = match call_ai(logs).await {
-            Ok(res) => res,
-            Err(e) => {
-                error!(error = ?e, job_id = %job_id, "AI call failed");
-
-                if retry_count < MAX_RETRIES {
-                    warn!(job_id = %job_id, retry = retry_count, "Retrying job");
-
-                    let new_job = Job {
-                        id: job_id.clone(),
-                        retry: retry_count + 1,
-                        logs: job.logs.clone(),
-                    };
-
-                    let job_json = match serde_json::to_string(&new_job) {
-                        Ok(j) => j,
-                        Err(e) => {
-                            error!(error = ?e, "Failed to serialize job");
-                            drop(permit);
-                            continue;
-                        }
-                    };
-
-                    if let Err(e) = conn.lpush::<_, _, ()>("job_queue", job_json).await {
-                        error!(error = ?e, "Failed to requeue job");
-                    }
-                } else {
-                    error!(job_id = %job_id, "Moved to DLQ");
-
-                    if let Err(e) = conn.lpush::<_, _, ()>("dlq", job_data).await {
-                        error!(error = ?e, "Failed to push DLQ");
+                match queue.create_consumer_connection().await {
+                    Ok(conn) => consumer_conn = conn,
+                    Err(reconnect_error) => {
+                        error!(error = ?reconnect_error, consumer = %consumer_name, "Redis consumer reconnect failed");
+                        tokio::time::sleep(Duration::from_millis(500)).await;
                     }
                 }
 
-                drop(permit);
                 continue;
             }
         };
 
-        if let Err(e) = conn
-            .set_ex::<_, _, ()>(format!("result:{}", job_id), result, 300)
-            .await
+        let Some(stream_job) = maybe_stream_job else {
+            drop(permit);
+            continue;
+        };
+
+        if let Err(error) = process_stream_job(&queue, &ai_service, &stream_job, max_retries).await
         {
-            error!(error = ?e, "Failed to store result");
+            error!(
+                error = ?error,
+                job_id = %stream_job.job.id,
+                stream_id = %stream_job.stream_id,
+                consumer = %consumer_name,
+                "Job processing failed"
+            );
         }
 
-        info!(job_id = %job_id, "Job completed");
-
         drop(permit);
+    }
+}
+
+async fn process_stream_job(
+    queue: &JobQueue,
+    ai_service: &AiService,
+    stream_job: &StreamJob,
+    max_retries: u32,
+) -> Result<(), AppError> {
+    if !queue.start_job(stream_job).await? {
+        info!(
+            job_id = %stream_job.job.id,
+            stream_id = %stream_job.stream_id,
+            "Skipping stale or duplicate stream entry"
+        );
+        return Ok(());
+    }
+
+    info!(
+        job_id = %stream_job.job.id,
+        retry = stream_job.job.retry,
+        stream_id = %stream_job.stream_id,
+        claimed_stale = stream_job.claimed_stale,
+        "Processing job"
+    );
+
+    match ai_service.analyze_logs(&stream_job.job.logs).await {
+        Ok(result) => {
+            queue.complete_job(stream_job, &result).await?;
+            info!(
+                job_id = %stream_job.job.id,
+                stream_id = %stream_job.stream_id,
+                "Job completed"
+            );
+        }
+        Err(error) => {
+            let should_retry = error.is_retryable() && stream_job.job.retry < max_retries;
+
+            if should_retry {
+                let delay = retry_backoff(stream_job.job.retry);
+                warn!(
+                    job_id = %stream_job.job.id,
+                    stream_id = %stream_job.stream_id,
+                    retry = stream_job.job.retry,
+                    delay_ms = delay.as_millis(),
+                    error = ?error,
+                    "Retrying job"
+                );
+                tokio::time::sleep(delay).await;
+                queue.retry_job(stream_job, &error.to_string()).await?;
+            } else {
+                error!(
+                    job_id = %stream_job.job.id,
+                    stream_id = %stream_job.stream_id,
+                    retry = stream_job.job.retry,
+                    error = ?error,
+                    "Moving job to DLQ"
+                );
+                queue
+                    .dead_letter_job(stream_job, &error.to_string())
+                    .await?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn retry_backoff(retry: u32) -> Duration {
+    let base_ms = 250_u64.saturating_mul(1_u64 << retry.min(6));
+    let jitter_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+        % 250;
+
+    Duration::from_millis(base_ms + jitter_ms)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_backoff_increases_with_retry_count() {
+        let first = retry_backoff(0);
+        let second = retry_backoff(1);
+
+        assert!(second >= first);
+        assert!(first >= Duration::from_millis(250));
     }
 }
