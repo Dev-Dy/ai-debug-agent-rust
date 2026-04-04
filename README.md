@@ -1,194 +1,172 @@
-# AI Debug Agent
+# 🚀 AI Debug Agent (Rust)
 
-A backend system that asynchronously analyzes application logs and returns AI-generated debugging insights — built in Rust with Axum, Redis Streams, and OpenAI.
-
----
-
-## Why I built this
-
-Most "AI + API" projects are synchronous — you send a request, wait for OpenAI to respond, get a result. That breaks under load. I wanted to build something closer to how real systems work: a non-blocking queue-based architecture where the API layer and the AI processing layer are fully decoupled.
-
-This project forced me to deal with real distributed systems problems in Rust — consumer group coordination, retry logic with backoff, dead letter queues, and semaphore-controlled concurrency — all in async Rust with Tokio.
+A **production-style distributed debugging system** built in Rust that processes logs asynchronously and uses AI to analyze failures at scale.
 
 ---
 
-## Architecture
+## 🧠 Problem
 
-```
-Client → POST /analyze → API Server → Redis Stream
-                                           ↓
-                                      Worker Pool
-                                           ↓
-                                      OpenAI API
-                                           ↓
-                                    Redis (result + TTL)
-                                           ↑
-                            Client → GET /result/:job_id
-```
+Debugging backend systems is slow, manual, and reactive:
 
-The API and worker run in the same binary (`cargo run -- all`) or as separate processes for horizontal scaling.
+* Logs are scattered
+* Failures are hard to trace
+* Engineers spend hours diagnosing issues
 
 ---
 
-## Features
+## 💡 Solution
 
-- Non-blocking API — responds immediately with a `job_id`, processes in background
-- Redis Streams with consumer groups and explicit ACK
-- Worker pool with Tokio — concurrent AI calls with semaphore limits
-- Retry logic — up to 3 attempts per job before moving to DLQ
-- Dead Letter Queue — failed jobs captured for inspection
-- Result storage with TTL — results expire automatically
-- Structured logging with `tracing`
-- Docker support — single `docker-compose up` spins up Redis + app
+This project introduces an **AI-powered debugging agent** that:
+
+* accepts logs via API
+* processes them asynchronously
+* analyzes issues using an external AI service
+* scales using worker-based architecture
 
 ---
 
-## Tech stack
+## 🏗️ Architecture
 
-| Layer | Tech |
-|---|---|
-| Web framework | Axum 0.7 |
-| Async runtime | Tokio |
-| Queue | Redis Streams |
-| AI | OpenAI API via reqwest |
-| Error handling | thiserror |
-| Logging | tracing + tracing-subscriber |
-| Containerization | Docker + docker-compose |
-
----
-
-## API
-
-### `POST /analyze`
-
-Submit logs for analysis. Returns a job ID immediately.
-
-**Request:**
-```json
-{
-  "logs": "ERROR: connection pool timeout after 30s, retries exhausted"
-}
+```text
+Client → API (Axum) → Redis → Worker Pool → AI API → Result Store
 ```
 
-**Response:**
-```json
-{
-  "job_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "queued"
-}
-```
+* **API Layer** → receives jobs
+* **Queue (Redis)** → decouples ingestion & processing
+* **Workers** → process jobs concurrently
+* **AI Service** → analyzes logs
+* **Result Store** → stores processed output
 
 ---
 
-### `GET /result/:job_id`
+## ⚙️ Features
 
-Poll for the result using the job ID.
-
-**While processing:**
-```json
-{
-  "job_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "running",
-  "retry": 0,
-  "result": null,
-  "error": null,
-  "updated_at_ms": 1710000000000
-}
-```
-
-**On completion:**
-```json
-{
-  "job_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "completed",
-  "retry": 0,
-  "result": "Root cause: connection pool exhaustion. The database is likely under high load or connections are not being released properly. Check for unclosed transactions and consider increasing pool size or adding connection timeout handling.",
-  "error": null,
-  "updated_at_ms": 1710000000000
-}
-```
+* ⚡ Async job processing using Tokio
+* 📦 Redis-backed queue system
+* 🔁 Retry + Dead Letter Queue (DLQ)
+* 🧵 Worker pool with concurrency control
+* 📊 Structured logging using tracing
+* 🐳 Docker-based deployment
+* 🔌 External AI API integration
 
 ---
 
-## Run locally
+## 🚀 Quick Start
 
-### Prerequisites
-
-- Rust (stable)
-- Docker
-
-### Start Redis
+### 1. Clone the repo
 
 ```bash
-docker run -d -p 6379:6379 --name redis redis
+git clone https://github.com/Dev-Dy/ai-debug-agent-rust.git
+cd ai-debug-agent-rust
 ```
 
-### Run everything in one process
+---
 
-**Linux / macOS:**
-```bash
-OPENAI_API_KEY="sk-..." cargo run -- all
-```
-
-**Windows (PowerShell):**
-```powershell
-$env:OPENAI_API_KEY="sk-..."
-cargo run -- all
-```
-
-### Run API and worker as separate processes
+### 2. Start system
 
 ```bash
-# Terminal 1 — API server
-cargo run -- api
-
-# Terminal 2 — Worker
-OPENAI_API_KEY="sk-..." cargo run -- worker
+docker compose up --build
 ```
 
-### Or use Docker Compose
+---
+
+### 3. Submit a job
 
 ```bash
-OPENAI_API_KEY="sk-..." docker-compose up
+curl -X POST http://localhost:3000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "job-1",
+    "retry": 0,
+    "logs": "error: database connection failed"
+  }'
 ```
 
 ---
 
-## Project structure
+### 4. Fetch result
 
-```
-src/
-├── handlers/       # Axum route handlers (analyze, result)
-├── worker/         # Background job processor
-├── queue/          # Redis Streams producer/consumer logic
-├── services/       # OpenAI API integration
-├── models/         # Shared data types
-├── app.rs          # Router setup
-└── app_state.rs    # Shared state (Redis pool, semaphore)
+```bash
+curl http://localhost:3000/results/job-1
 ```
 
 ---
 
-## What I learned
+## 📊 Example Flow
 
-**Async traits in Rust are tricky.** `async fn` in traits isn't object-safe by default, which forced me to think carefully about where to use `dyn Trait` vs generics. I ended up using `async-trait` in a few places but tried to minimize it.
-
-**The borrow checker pushes you toward better architecture.** Sharing the Redis connection pool across the API and worker threads required `Arc<RedisPool>` in `AppState`. The compiler forced the ownership question early, which led to a cleaner design than I'd have written in a dynamic language.
-
-**Redis Streams are more complex than a simple queue.** Managing consumer groups, ACK logic, and pending entry lists properly takes more thought than using a basic `LPUSH`/`RPOP`. The DLQ implementation required understanding how Redis tracks unacknowledged messages.
-
----
-
-## Possible improvements
-
-- Replace polling (`GET /result/:job_id`) with WebSocket for push-based updates
-- Add Prometheus metrics endpoint
-- Add authentication + rate limiting on the API
-- Swap OpenAI for a local model via Ollama for cost control
-- Load test the semaphore limits under concurrent traffic
+1. Client submits logs
+2. API pushes job to Redis
+3. Worker picks job
+4. AI analyzes logs
+5. Result stored and returned
 
 ---
 
-## License
+## 🔥 Why Rust?
 
-MIT
+* Memory safety without GC
+* High-performance async execution
+* Strong concurrency guarantees
+* Ideal for distributed systems
+
+---
+
+## ⚠️ Current Limitations
+
+* No idempotency (duplicate jobs possible)
+* Basic retry logic (no backoff yet)
+* No metrics/observability (planned)
+
+---
+
+## 🗺️ Roadmap
+
+* [ ] Redis Streams + consumer groups
+* [ ] Job recovery (XCLAIM)
+* [ ] Prometheus metrics + tracing
+* [ ] Idempotency layer
+* [ ] Rate limiting / backpressure
+* [ ] Multi-tenant support
+
+---
+
+## 🧪 Tech Stack
+
+* Rust (Tokio async runtime)
+* Axum (API framework)
+* Redis (queue + storage)
+* Reqwest (HTTP client)
+* Tracing (logging)
+* Docker (deployment)
+
+---
+
+## 🤝 Contributing
+
+Contributions, feedback, and ideas are welcome.
+
+If you find issues or want to improve the system:
+
+* open an issue
+* submit a PR
+
+---
+
+## 📌 Use Cases
+
+* Backend debugging automation
+* Log analysis pipelines
+* Async job processing systems
+* AI-assisted observability
+
+---
+
+## ⭐ If You Found This Useful
+
+Give it a star ⭐ and share your feedback!
+
+---
+
+## 👨‍💻 Author
+
+Built as part of a journey to design **production-grade distributed systems in Rust**.
