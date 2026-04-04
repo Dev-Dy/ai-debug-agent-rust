@@ -54,7 +54,7 @@ impl Config {
     pub fn from_env(_role: &RuntimeRole) -> Result<Self, AppError> {
         let config = Self {
             redis_url: env_or_default("REDIS_URL", "redis://127.0.0.1:6379/"),
-            bind_addr: env_or_default("BIND_ADDR", "0.0.0.0:3000"),
+            bind_addr: bind_addr_from_env(),
             worker_count: parse_usize_env("WORKER_COUNT", 5)?,
             max_concurrent_jobs: parse_usize_env("MAX_CONCURRENT_JOBS", 3)?,
             max_retries: parse_u32_env("MAX_RETRIES", 3)?,
@@ -100,6 +100,13 @@ impl Config {
 
 fn env_or_default(name: &str, default_value: &str) -> String {
     env::var(name).unwrap_or_else(|_| default_value.to_string())
+}
+
+fn bind_addr_from_env() -> String {
+    env::var("BIND_ADDR")
+        .ok()
+        .or_else(|| env::var("PORT").ok().map(|port| format!("0.0.0.0:{port}")))
+        .unwrap_or_else(|| "0.0.0.0:3000".to_string())
 }
 
 fn parse_usize_env(name: &str, default_value: usize) -> Result<usize, AppError> {

@@ -17,4 +17,4 @@ EXPOSE 3000
 USER appuser
 
 ENTRYPOINT ["/app/ai_debug_agent"]
-CMD ["api"]
+CMD ["all"]
