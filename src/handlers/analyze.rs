@@ -1,10 +1,9 @@
 use axum::{Json, extract::State};
-use redis::AsyncCommands;
 use uuid::Uuid;
 
 use crate::app_state::AppState;
 use crate::errors::error::AppError;
-use crate::models::job::Job;
+use crate::models::job::{Job, JobStatus};
 use crate::models::log::{LogRequest, LogResponse};
 
 pub async fn analyze(
@@ -17,13 +16,11 @@ pub async fn analyze(
         retry: 0,
         logs: payload.logs,
     };
-    let job_data = serde_json::to_string(&job)?;
 
-    let mut conn = state.queue.client.get_async_connection().await?;
-
-    let _: () = conn.lpush("job_queue", job_data).await?;
+    state.queue.enqueue_job(&job).await?;
 
     Ok(Json(LogResponse {
-        analysis: "Job queued".to_string(),
+        job_id,
+        status: JobStatus::Queued,
     }))
 }
