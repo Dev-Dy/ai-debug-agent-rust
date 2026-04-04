@@ -6,9 +6,7 @@ use uuid::Uuid;
 
 use crate::app_state::AppState;
 use crate::errors::error::AppError;
-use crate::models::session::{
-    CreateSessionRequest, CreateSessionResponse, DeleteSessionResponse,
-};
+use crate::models::session::{CreateSessionRequest, CreateSessionResponse, DeleteSessionResponse};
 
 pub async fn create_session(
     State(state): State<AppState>,

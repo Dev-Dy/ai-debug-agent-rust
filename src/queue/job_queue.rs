@@ -115,9 +115,8 @@ impl JobQueue {
             .hget(self.session_key(session_id), "encrypted_api_key")
             .await?;
 
-        let encrypted_api_key = encrypted_api_key.ok_or_else(|| {
-            AppError::Unauthorized("session is invalid or expired".to_string())
-        })?;
+        let encrypted_api_key = encrypted_api_key
+            .ok_or_else(|| AppError::Unauthorized("session is invalid or expired".to_string()))?;
 
         decrypt_api_key(&self.session_cipher, &encrypted_api_key)
     }
@@ -527,9 +526,9 @@ fn encrypt_api_key(cipher: &Aes256Gcm, api_key: &str) -> Result<String, AppError
 }
 
 fn decrypt_api_key(cipher: &Aes256Gcm, encrypted_api_key: &str) -> Result<String, AppError> {
-    let decoded_payload = STANDARD_NO_PAD.decode(encrypted_api_key).map_err(|_| {
-        AppError::Crypto("stored session API key is not valid base64".to_string())
-    })?;
+    let decoded_payload = STANDARD_NO_PAD
+        .decode(encrypted_api_key)
+        .map_err(|_| AppError::Crypto("stored session API key is not valid base64".to_string()))?;
 
     if decoded_payload.len() <= 12 {
         return Err(AppError::Crypto(

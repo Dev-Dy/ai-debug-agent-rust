@@ -99,10 +99,7 @@ async fn process_stream_job(
         "Processing job"
     );
 
-    let session_api_key = match queue
-        .load_session_api_key(&stream_job.job.session_id)
-        .await
-    {
+    let session_api_key = match queue.load_session_api_key(&stream_job.job.session_id).await {
         Ok(api_key) => api_key,
         Err(error) => {
             handle_processing_error(queue, stream_job, max_retries, error).await?;

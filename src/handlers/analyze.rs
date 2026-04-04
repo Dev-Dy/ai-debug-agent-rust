@@ -1,8 +1,4 @@
-use axum::{
-    Json,
-    extract::State,
-    http::HeaderMap,
-};
+use axum::{Json, extract::State, http::HeaderMap};
 use uuid::Uuid;
 
 use crate::app_state::AppState;
@@ -20,9 +16,7 @@ pub async fn analyze(
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            AppError::Unauthorized("missing x-session-id header".to_string())
-        })?
+        .ok_or_else(|| AppError::Unauthorized("missing x-session-id header".to_string()))?
         .to_string();
 
     if !state.queue.session_exists(&session_id).await? {

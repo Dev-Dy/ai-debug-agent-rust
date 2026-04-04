@@ -51,7 +51,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn from_env(role: &RuntimeRole) -> Result<Self, AppError> {
+    pub fn from_env(_role: &RuntimeRole) -> Result<Self, AppError> {
         let config = Self {
             redis_url: env_or_default("REDIS_URL", "redis://127.0.0.1:6379/"),
             bind_addr: env_or_default("BIND_ADDR", "0.0.0.0:3000"),
