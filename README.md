@@ -9,9 +9,9 @@ A backend system that processes logs asynchronously and returns AI-generated deb
 Instead of analyzing logs in the request itself, this system:
 
 * Accepts logs via API
-* Pushes them to a queue (Redis)
+* Pushes them to a Redis Stream
 * Processes them in background workers
-* Stores the result
+* Stores job state/result in Redis
 * Lets client fetch result using job ID
 
 ---
@@ -29,7 +29,7 @@ Client → API → Redis Queue → Worker → AI → Redis (result)
 ## Features
 
 * Async job processing (non-blocking API)
-* Redis-based queue
+* Redis Streams consumer-group queue
 * Worker system using Tokio
 * Retry (max 3 attempts)
 * Dead Letter Queue (DLQ) for failed jobs
@@ -63,7 +63,8 @@ Response:
 
 ```json
 {
-  "analysis": "Job queued: <job_id>"
+  "job_id": "<job_id>",
+  "status": "queued"
 }
 ```
 
@@ -75,7 +76,12 @@ While processing:
 
 ```json
 {
-  "status": "processing"
+  "job_id": "<job_id>",
+  "status": "running",
+  "retry": 0,
+  "result": null,
+  "error": null,
+  "updated_at_ms": 1710000000000
 }
 ```
 
@@ -83,8 +89,12 @@ After completion:
 
 ```json
 {
+  "job_id": "<job_id>",
   "status": "completed",
-  "result": "Root cause explanation..."
+  "retry": 0,
+  "result": "Root cause explanation...",
+  "error": null,
+  "updated_at_ms": 1710000000000
 }
 ```
 
@@ -98,10 +108,22 @@ After completion:
 docker run -d -p 6379:6379 --name redis redis
 ```
 
-### Run app
+### Run API + workers in one process
 
 ```
-cargo run
+$env:OPENAI_API_KEY="..."
+cargo run -- all
+```
+
+### Run API and workers as separate processes
+
+```
+cargo run -- api
+```
+
+```
+$env:OPENAI_API_KEY="..."
+cargo run -- worker
 ```
 
 ---
@@ -123,10 +145,10 @@ src/
 
 ## Notes
 
-* Uses Redis list as queue (LPUSH + RPOP)
+* Uses Redis Streams with consumer groups and explicit ACK
 * Semaphore limits concurrent AI calls
 * Retry logic prevents infinite loops
-* Failed jobs go to DLQ
+* Failed jobs go to a DLQ stream
 
 ---
 
