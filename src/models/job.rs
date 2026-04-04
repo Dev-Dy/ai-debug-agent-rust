@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct Job {
     pub id: String,
+    pub session_id: String,
     pub retry: u32,
     pub logs: String,
 }
@@ -11,6 +12,7 @@ impl Job {
     pub fn next_retry(&self) -> Self {
         Self {
             id: self.id.clone(),
+            session_id: self.session_id.clone(),
             retry: self.retry + 1,
             logs: self.logs.clone(),
         }

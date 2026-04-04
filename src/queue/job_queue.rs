@@ -3,6 +3,11 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use aes_gcm::{
+    Aes256Gcm, Nonce,
+    aead::{Aead, AeadCore, KeyInit, OsRng},
+};
+use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
 use redis::{
     AsyncCommands, Client,
     aio::{Connection, ConnectionManager},
@@ -10,6 +15,7 @@ use redis::{
         StreamClaimReply, StreamId, StreamPendingCountReply, StreamReadOptions, StreamReadReply,
     },
 };
+use sha2::{Digest, Sha256};
 
 use crate::{
     config::helper::Config,
@@ -27,6 +33,8 @@ pub struct JobQueue {
     read_block_ms: usize,
     claim_idle_ms: usize,
     job_status_ttl_secs: usize,
+    session_ttl_secs: usize,
+    session_cipher: Aes256Gcm,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -50,6 +58,8 @@ impl JobQueue {
             read_block_ms: config.read_block_ms,
             claim_idle_ms: config.claim_idle_ms,
             job_status_ttl_secs: config.job_status_ttl_secs,
+            session_ttl_secs: config.session_ttl_secs,
+            session_cipher: build_session_cipher(&config.session_secret)?,
         })
     }
 
@@ -68,6 +78,60 @@ impl JobQueue {
             Err(error) if error.to_string().contains("BUSYGROUP") => Ok(()),
             Err(error) => Err(AppError::Redis(error)),
         }
+    }
+
+    pub async fn store_session_key(
+        &self,
+        session_id: &str,
+        api_key: &str,
+    ) -> Result<usize, AppError> {
+        let encrypted_api_key = encrypt_api_key(&self.session_cipher, api_key)?;
+        let mut conn = self.connection_manager.clone();
+        let session_key = self.session_key(session_id);
+
+        let mut pipe = redis::pipe();
+        pipe.atomic()
+            .cmd("HSET")
+            .arg(&session_key)
+            .arg("session_id")
+            .arg(session_id)
+            .arg("encrypted_api_key")
+            .arg(encrypted_api_key)
+            .arg("created_at_ms")
+            .arg(now_ms())
+            .ignore()
+            .cmd("EXPIRE")
+            .arg(&session_key)
+            .arg(self.session_ttl_secs)
+            .ignore();
+
+        let _: () = pipe.query_async(&mut conn).await?;
+        Ok(self.session_ttl_secs)
+    }
+
+    pub async fn load_session_api_key(&self, session_id: &str) -> Result<String, AppError> {
+        let mut conn = self.connection_manager.clone();
+        let encrypted_api_key: Option<String> = conn
+            .hget(self.session_key(session_id), "encrypted_api_key")
+            .await?;
+
+        let encrypted_api_key = encrypted_api_key.ok_or_else(|| {
+            AppError::Unauthorized("session is invalid or expired".to_string())
+        })?;
+
+        decrypt_api_key(&self.session_cipher, &encrypted_api_key)
+    }
+
+    pub async fn delete_session_key(&self, session_id: &str) -> Result<bool, AppError> {
+        let mut conn = self.connection_manager.clone();
+        let deleted_count: usize = conn.del(self.session_key(session_id)).await?;
+        Ok(deleted_count > 0)
+    }
+
+    pub async fn session_exists(&self, session_id: &str) -> Result<bool, AppError> {
+        let mut conn = self.connection_manager.clone();
+        let exists: bool = conn.exists(self.session_key(session_id)).await?;
+        Ok(exists)
     }
 
     pub async fn enqueue_job(&self, job: &Job) -> Result<(), AppError> {
@@ -439,6 +503,47 @@ impl JobQueue {
     fn job_key(&self, job_id: &str) -> String {
         format!("job:{job_id}")
     }
+
+    fn session_key(&self, session_id: &str) -> String {
+        format!("session:{session_id}")
+    }
+}
+
+fn build_session_cipher(session_secret: &str) -> Result<Aes256Gcm, AppError> {
+    let digest = Sha256::digest(session_secret.as_bytes());
+    Aes256Gcm::new_from_slice(&digest)
+        .map_err(|_| AppError::Crypto("failed to initialize session cipher".to_string()))
+}
+
+fn encrypt_api_key(cipher: &Aes256Gcm, api_key: &str) -> Result<String, AppError> {
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let ciphertext = cipher
+        .encrypt(&nonce, api_key.as_bytes())
+        .map_err(|_| AppError::Crypto("failed to encrypt session API key".to_string()))?;
+
+    let mut encoded_payload = nonce.to_vec();
+    encoded_payload.extend_from_slice(&ciphertext);
+    Ok(STANDARD_NO_PAD.encode(encoded_payload))
+}
+
+fn decrypt_api_key(cipher: &Aes256Gcm, encrypted_api_key: &str) -> Result<String, AppError> {
+    let decoded_payload = STANDARD_NO_PAD.decode(encrypted_api_key).map_err(|_| {
+        AppError::Crypto("stored session API key is not valid base64".to_string())
+    })?;
+
+    if decoded_payload.len() <= 12 {
+        return Err(AppError::Crypto(
+            "stored session API key payload is malformed".to_string(),
+        ));
+    }
+
+    let (nonce_bytes, ciphertext) = decoded_payload.split_at(12);
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
+        .map_err(|_| AppError::Crypto("failed to decrypt session API key".to_string()))?;
+
+    String::from_utf8(plaintext)
+        .map_err(|_| AppError::Crypto("session API key is not valid UTF-8".to_string()))
 }
 
 fn decode_stream_job(entry: StreamId, claimed_stale: bool) -> Result<StreamJob, AppError> {
@@ -538,5 +643,14 @@ mod tests {
 
         let error = decode_stream_job(stream_id, false).unwrap_err();
         assert!(matches!(error, AppError::QueueData(_)));
+    }
+
+    #[test]
+    fn encrypt_and_decrypt_api_key_round_trip() {
+        let cipher = build_session_cipher("0123456789abcdef0123456789abcdef").unwrap();
+        let encrypted = encrypt_api_key(&cipher, "sk-test-123").unwrap();
+
+        assert_ne!(encrypted, "sk-test-123");
+        assert_eq!(decrypt_api_key(&cipher, &encrypted).unwrap(), "sk-test-123");
     }
 }

@@ -18,6 +18,10 @@ pub enum AppError {
     Config(String),
     #[error("Job not found: {0}")]
     NotFound(String),
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
+    #[error("Crypto error: {0}")]
+    Crypto(String),
     #[error("Queue data error: {0}")]
     QueueData(String),
     #[error("AI provider returned HTTP {status}: {body}")]
@@ -36,6 +40,8 @@ impl IntoResponse for AppError {
             AppError::Http(_) => StatusCode::BAD_GATEWAY,
             AppError::Config(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
+            AppError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            AppError::Crypto(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::QueueData(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::AiStatus { status, .. } => {
                 if status == StatusCode::TOO_MANY_REQUESTS.as_u16() {
@@ -65,6 +71,8 @@ impl AppError {
             AppError::Parse(_)
             | AppError::Config(_)
             | AppError::NotFound(_)
+            | AppError::Unauthorized(_)
+            | AppError::Crypto(_)
             | AppError::QueueData(_)
             | AppError::AiResponse(_) => false,
         }

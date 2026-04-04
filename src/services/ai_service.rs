@@ -7,16 +7,11 @@ use crate::errors::error::AppError;
 pub struct AiService {
     client: reqwest::Client,
     endpoint: String,
-    api_key: String,
     model: String,
 }
 
 impl AiService {
     pub fn new(config: &Config) -> Result<Self, AppError> {
-        let api_key = config.openai_api_key.clone().ok_or_else(|| {
-            AppError::Config("OPENAI_API_KEY must be configured for workers".to_string())
-        })?;
-
         let client = reqwest::Client::builder()
             .timeout(config.ai_timeout())
             .build()?;
@@ -24,12 +19,11 @@ impl AiService {
         Ok(Self {
             client,
             endpoint: config.ai_endpoint.clone(),
-            api_key,
             model: config.ai_model.clone(),
         })
     }
 
-    pub async fn analyze_logs(&self, logs: &str) -> Result<String, AppError> {
+    pub async fn analyze_logs(&self, logs: &str, api_key: &str) -> Result<String, AppError> {
         let request = ChatCompletionRequest {
             model: &self.model,
             messages: vec![
@@ -47,7 +41,7 @@ impl AiService {
         let response = self
             .client
             .post(&self.endpoint)
-            .bearer_auth(&self.api_key)
+            .bearer_auth(api_key)
             .json(&request)
             .send()
             .await?;

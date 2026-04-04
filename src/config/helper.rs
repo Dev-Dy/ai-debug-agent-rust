@@ -43,7 +43,8 @@ pub struct Config {
     pub read_block_ms: usize,
     pub claim_idle_ms: usize,
     pub job_status_ttl_secs: usize,
-    pub openai_api_key: Option<String>,
+    pub session_ttl_secs: usize,
+    pub session_secret: String,
     pub ai_endpoint: String,
     pub ai_model: String,
     pub ai_timeout_secs: u64,
@@ -63,9 +64,8 @@ impl Config {
             read_block_ms: parse_usize_env("READ_BLOCK_MS", 5000)?,
             claim_idle_ms: parse_usize_env("CLAIM_IDLE_MS", 30000)?,
             job_status_ttl_secs: parse_usize_env("JOB_STATUS_TTL_SECS", 86400)?,
-            openai_api_key: env::var("OPENAI_API_KEY")
-                .ok()
-                .filter(|value| !value.is_empty()),
+            session_ttl_secs: parse_usize_env("SESSION_TTL_SECS", 86400)?,
+            session_secret: env_or_default("SESSION_SECRET", ""),
             ai_endpoint: env_or_default(
                 "AI_ENDPOINT",
                 "https://api.openai.com/v1/chat/completions",
@@ -74,9 +74,9 @@ impl Config {
             ai_timeout_secs: parse_u64_env("AI_TIMEOUT_SECS", 30)?,
         };
 
-        if role.runs_workers() && config.openai_api_key.is_none() {
+        if config.session_secret.len() < 32 {
             return Err(AppError::Config(
-                "OPENAI_API_KEY must be set for worker/all runtime roles".to_string(),
+                "SESSION_SECRET must be set and at least 32 characters long".to_string(),
             ));
         }
 

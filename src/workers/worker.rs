@@ -92,13 +92,28 @@ async fn process_stream_job(
 
     info!(
         job_id = %stream_job.job.id,
+        session_id = %stream_job.job.session_id,
         retry = stream_job.job.retry,
         stream_id = %stream_job.stream_id,
         claimed_stale = stream_job.claimed_stale,
         "Processing job"
     );
 
-    match ai_service.analyze_logs(&stream_job.job.logs).await {
+    let session_api_key = match queue
+        .load_session_api_key(&stream_job.job.session_id)
+        .await
+    {
+        Ok(api_key) => api_key,
+        Err(error) => {
+            handle_processing_error(queue, stream_job, max_retries, error).await?;
+            return Ok(());
+        }
+    };
+
+    match ai_service
+        .analyze_logs(&stream_job.job.logs, &session_api_key)
+        .await
+    {
         Ok(result) => {
             queue.complete_job(stream_job, &result).await?;
             info!(
@@ -108,33 +123,44 @@ async fn process_stream_job(
             );
         }
         Err(error) => {
-            let should_retry = error.is_retryable() && stream_job.job.retry < max_retries;
-
-            if should_retry {
-                let delay = retry_backoff(stream_job.job.retry);
-                warn!(
-                    job_id = %stream_job.job.id,
-                    stream_id = %stream_job.stream_id,
-                    retry = stream_job.job.retry,
-                    delay_ms = delay.as_millis(),
-                    error = ?error,
-                    "Retrying job"
-                );
-                tokio::time::sleep(delay).await;
-                queue.retry_job(stream_job, &error.to_string()).await?;
-            } else {
-                error!(
-                    job_id = %stream_job.job.id,
-                    stream_id = %stream_job.stream_id,
-                    retry = stream_job.job.retry,
-                    error = ?error,
-                    "Moving job to DLQ"
-                );
-                queue
-                    .dead_letter_job(stream_job, &error.to_string())
-                    .await?;
-            }
+            handle_processing_error(queue, stream_job, max_retries, error).await?;
         }
+    }
+
+    Ok(())
+}
+
+async fn handle_processing_error(
+    queue: &JobQueue,
+    stream_job: &StreamJob,
+    max_retries: u32,
+    error: AppError,
+) -> Result<(), AppError> {
+    let should_retry = error.is_retryable() && stream_job.job.retry < max_retries;
+
+    if should_retry {
+        let delay = retry_backoff(stream_job.job.retry);
+        warn!(
+            job_id = %stream_job.job.id,
+            stream_id = %stream_job.stream_id,
+            retry = stream_job.job.retry,
+            delay_ms = delay.as_millis(),
+            error = ?error,
+            "Retrying job"
+        );
+        tokio::time::sleep(delay).await;
+        queue.retry_job(stream_job, &error.to_string()).await?;
+    } else {
+        error!(
+            job_id = %stream_job.job.id,
+            stream_id = %stream_job.stream_id,
+            retry = stream_job.job.retry,
+            error = ?error,
+            "Moving job to DLQ"
+        );
+        queue
+            .dead_letter_job(stream_job, &error.to_string())
+            .await?;
     }
 
     Ok(())
